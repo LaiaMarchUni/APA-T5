@@ -5,7 +5,7 @@
 > [!Important]
 > Introduzca a continuación su nombre y apellidos:
 >
-> Fulano Mengano Zutano
+> Laia March Cervantes
 
 ## Aviso Importante
 
@@ -208,11 +208,95 @@ pantalla, debe hacerse en formato *markdown*).
 
 ##### Código de `estereo2mono()`
 
+```python
+def estereo2mono(ficEste, ficMono, canal=2):
+    """Converteix estèreo a mono: 0=L, 1=R, 2=Semisuma, 3=Semidiferència."""
+    with open(ficEste, 'rb') as f_in, open(ficMono, 'wb') as f_out:
+        p = leer_cabecera(f_in)
+        if p['canals'] != 2:
+            raise ValueError("El fitxer d'entrada ha de ser estèreo.")
+        
+        num_m = p['data_size'] // p['block_align']
+        dades = struct.unpack(f'<{num_m * 2}h', f_in.read(p['data_size']))
+        L, R = dades[::2], dades[1::2]
+        
+        opcions = {
+            0: L,
+            1: R,
+            2: [(l + r) // 2 for l, r in zip(L, R)],
+            3: [(l - r) // 2 for l, r in zip(L, R)]
+        }
+        res = opcions.get(canal)
+        if res is None: raise ValueError("Canal no vàlid.")
+            
+        p.update({'canals': 1, 'block_align': p['bits_per_sample'] // 8})
+        p['byte_rate'] = p['freq'] * p['block_align']
+        escribir_cabecera(f_out, p, num_m)
+        f_out.write(struct.pack(f'<{num_m}h', *res))
+```
+
 ##### Código de `mono2estereo()`
+
+```python
+def mono2estereo(ficIzq, ficDer, ficEste):
+    """Combina dos fitxers mono en un d'estèreo."""
+    with open(ficIzq, 'rb') as f_l, open(ficDer, 'rb') as f_r, open(ficEste, 'wb') as f_out:
+        p_l, p_r = leer_cabecera(f_l), leer_cabecera(f_r)
+        num_m = min(p_l['data_size'] // p_l['block_align'], p_r['data_size'] // p_r['block_align'])
+        
+        L = struct.unpack(f'<{num_m}h', f_l.read(num_m * (p_l['bits_per_sample'] // 8)))
+        R = struct.unpack(f'<{num_m}h', f_r.read(num_m * (p_r['bits_per_sample'] // 8)))
+        
+        intercalat = [val for parella in zip(L, R) for val in parella]
+        p_l.update({'canals': 2, 'block_align': (p_l['bits_per_sample'] // 8) * 2})
+        p_l['byte_rate'] = p_l['freq'] * p_l['block_align']
+        
+        escribir_cabecera(f_out, p_l, num_m)
+        f_out.write(struct.pack(f'<{num_m * 2}h', *intercalat))
+
+```
 
 ##### Código de `codEstereo()`
 
+```python
+def codEstereo(ficEste, ficCod):
+    """Codifica a 32 bits: MSB = (L+R)/2, LSB = (L-R)/2."""
+    with open(ficEste, 'rb') as f_in, open(ficCod, 'wb') as f_out:
+        p = leer_cabecera(f_in)
+        num_m = p['data_size'] // p['block_align']
+        dades = struct.unpack(f'<{num_m * 2}h', f_in.read(p['data_size']))
+        
+        cod = [(((l + r) // 2) << 16) | (((l - r) // 2) & 0xFFFF) 
+               for l, r in zip(dades[::2], dades[1::2])]
+        
+        p.update({'canals': 1, 'bits_per_sample': 32, 'block_align': 4})
+        p['byte_rate'] = p['freq'] * 4
+        escribir_cabecera(f_out, p, num_m)
+        f_out.write(struct.pack(f'<{num_m}i', *cod))
+```
+
 ##### Código de `decEstereo()`
+
+```python
+def decEstereo(ficCod, ficEste):
+    """Decodifica el senyal de 32 bits a estèreo de 16 bits."""
+    with open(ficCod, 'rb') as f_in, open(ficEste, 'wb') as f_out:
+        p = leer_cabecera(f_in)
+        num_m = p['data_size'] // p['block_align']
+        dades = struct.unpack(f'<{num_m}i', f_in.read(p['data_size']))
+        
+        semisuma = [v >> 16 for v in dades]
+        semidif = [((v & 0xFFFF) ^ 0x8000) - 0x8000 for v in dades]
+        
+        L = [s + d for s, d in zip(semisuma, semidif)]
+        R = [s - d for s, d in zip(semisuma, semidif)]
+        inter = [val for parella in zip(L, R) for val in parella]
+        
+        p.update({'canals': 2, 'bits_per_sample': 16, 'block_align': 4})
+        p['byte_rate'] = p['freq'] * 4
+        escribir_cabecera(f_out, p, num_m)
+        f_out.write(struct.pack(f'<{num_m * 2}h', *inter))
+```
 
 #### Subida del resultado al repositorio GitHub y *pull-request*
 
